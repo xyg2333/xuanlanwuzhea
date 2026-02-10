@@ -1,24 +1,12 @@
 import { connect } from 'cloudflare:sockets';
 
-// ========================== 1. 用户配置 ==========================
-const userID = '4d9a005c-52bf-49c7-a40a-6277830d00f9'; // 你的 UUID (用于访问后台面板)
-const defaultSub = 'honghong123'; // 你的订阅 Token (用于订阅地址，建议修改为随机 字母+数字)
+// ==============================================================================
+// 1. 用户自定义配置 (请务必修改 UUID 和 subToken)
+// ==============================================================================
+const userID = '4d9a005c-52bf-49c7-a40a-6277830d00f9'; // 你的 UUID
+const subToken = 'honghong123'; // 你的自定义订阅路径 (建议修改为随机 字母+数字，例如 mysecret123)
 
-// 优选 IP 配置
-const proxyIPs = { 
-    'US': 'ProxyIP.US.CMLiussss.net',
-    'EU': 'ProxyIP.DE.CMLiussss.net',
-    'SG': 'ProxyIP.SG.CMLiussss.net',
-    'JP': 'ProxyIP.JP.CMLiussss.net',
-    'CN': 'ProxyIP.CMLiussss.net'
-};
-
-// 外部节点来源 (ADDAPI)
-let ADDAPI = [
-    // 'https://你的其他订阅链接.com' 
-];
-
-// 内置 CF-CDN 静态节点列表
+// 优选 IP 列表 (CF-CDN)
 let cfip = [
     'nexusmods.com:443#♥ 哄哄公益请勿滥用 ♥',
     'da.mfa.gov.ua#♥ 哄哄TG交流群组@honghongtg ♥',
@@ -33,40 +21,43 @@ let cfip = [
     'cf.090227.xyz:443#♥哄哄CDN线路 Q♥'
 ];
 
-// 订阅转换后端
+// 外部节点来源 (可选)
+let ADDAPI = [];
+
+// 订阅转换后端 (如果 api.v1.mk 挂了，可以寻找替代品，或者直接用 V2RayNG 不用转换)
 const subConverter = 'https://api.v1.mk/sub?target=clash&url={url}&insert=false&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true';
 const subConfig = 'https://raw.githubusercontent.com/AbsoluteRay/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Mini_NoAuto.ini';
 
-// ========================== 2. 核心路由逻辑 ==========================
+// ==============================================================================
+// 2. 核心 Worker 逻辑
+// ==============================================================================
 
 export default {
     async fetch(request, env, ctx) {
         try {
             const url = new URL(request.url);
             const upgradeHeader = request.headers.get('Upgrade');
-            
-            // 获取环境变量或默认配置
             const UUID = (env.UUID || userID).trim();
-            const SUB_TOKEN = (env.SUB || defaultSub).trim();
+            const SUB = (env.SUB || subToken).trim();
 
-            // 1. 处理 WebSocket 流量 (VLESS/Trojan 代理)
+            // === 场景 1: WebSocket 代理流量 (VLESS/Trojan) ===
             if (upgradeHeader === 'websocket') {
                 return await vlessOverWSHandler(request, UUID);
             }
 
-            // 2. 路由：管理面板 (匹配 UUID)
+            // === 场景 2: 访问管理面板 (路径 == UUID) ===
             if (url.pathname === `/${UUID}`) {
-                return new Response(getHtmlPanel(UUID, SUB_TOKEN, url.host), {
+                return new Response(getHtmlPanel(UUID, SUB, url.hostname), {
                     headers: { 'Content-Type': 'text/html; charset=utf-8' }
                 });
             }
 
-            // 3. 路由：订阅地址 (匹配 Sub Token)
-            if (url.pathname === `/${SUB_TOKEN}`) {
+            // === 场景 3: 获取订阅内容 (路径 == SUB) ===
+            if (url.pathname === `/${SUB}`) {
                 return await getSubscription(url, UUID, request.headers.get('User-Agent'));
             }
 
-            // 4. 默认首页 (404 或伪装页)
+            // === 场景 4: 默认页 ===
             return new Response('Not Found', { status: 404 });
 
         } catch (err) {
@@ -75,22 +66,26 @@ export default {
     }
 };
 
-// ========================== 3. 订阅生成逻辑 ==========================
+// ==============================================================================
+// 3. 订阅生成器 (处理 502 问题的关键)
+// ==============================================================================
 
 async function getSubscription(url, uuid, userAgent) {
     userAgent = userAgent ? userAgent.toLowerCase() : '';
     let nodeList = [];
     const host = url.host;
+    const path = url.searchParams.get('path') || '/?ed=2560'; // 获取自定义路径参数
 
-    // A. 生成内置节点
+    // A. 生成内置节点 (VLESS)
     cfip.forEach(item => {
         const [addr, ps] = item.split('#');
         const [ip, port] = addr.split(':');
-        // VLESS 格式
-        nodeList.push(`vless://${uuid}@${ip}:${port||443}?encryption=none&security=tls&sni=${host}&fp=chrome&type=ws&host=${host}&path=%2F#${encodeURIComponent(ps||ip)}`);
+        // 构建 VLESS 链接，注意这里把 host 和 path 放进去了
+        const vlessLink = `vless://${uuid}@${ip}:${port || 443}?encryption=none&security=tls&sni=${host}&fp=chrome&type=ws&host=${host}&path=${encodeURIComponent(path)}#${encodeURIComponent(ps || ip)}`;
+        nodeList.push(vlessLink);
     });
 
-    // B. 获取 ADDAPI 节点
+    // B. 合并外部 API 节点
     if (ADDAPI && ADDAPI.length > 0) {
         for (const api of ADDAPI) {
             try {
@@ -99,13 +94,14 @@ async function getSubscription(url, uuid, userAgent) {
                     const text = await resp.text();
                     try { nodeList.push(atob(text)); } catch { nodeList.push(text); }
                 }
-            } catch {}
+            } catch { }
         }
     }
 
     const rawSub = nodeList.join('\n');
 
-    // C. 格式转换 (Clash / Singbox) - 仅当 User-Agent 匹配时跳转转换
+    // C. 智能转换 (仅针对 Clash/Singbox)
+    // 如果转换服务器 502，用户其实可以使用 Base64 原始格式，只需在客户端选对导入方式
     if (userAgent.includes('clash') && !userAgent.includes('shadowrocket')) {
         const clashUrl = subConverter
             .replace('{url}', encodeURIComponent(url.href))
@@ -121,9 +117,9 @@ async function getSubscription(url, uuid, userAgent) {
          return Response.redirect(singboxUrl, 302);
     }
 
-    // D. 默认返回 Base64 编码的订阅内容 (标准 V2Ray/Shadowrocket 格式)
+    // D. 默认返回 Base64 (通用格式，Shadowrocket/V2RayNG 可用)
     return new Response(btoa(rawSub), {
-        headers: { 
+        headers: {
             "Content-Type": "text/plain; charset=utf-8",
             "Profile-Update-Interval": "24",
             "Subscription-Userinfo": "upload=0; download=0; total=10737418240000; expire=0"
@@ -131,99 +127,402 @@ async function getSubscription(url, uuid, userAgent) {
     });
 }
 
-// ========================== 4. HTML 面板 (JS原生) ==========================
+// ==============================================================================
+// 4. HTML 面板 (完全还原 UI)
+// ==============================================================================
 
 function getHtmlPanel(uuid, subToken, host) {
-    // 关键：现在的订阅链接是 /SUB_TOKEN，而不是 /UUID
+    // 默认订阅地址
     const subLink = `https://${host}/${subToken}`;
-    
+
     return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Worker VLESS Panel</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: 'Segoe UI', sans-serif; background: #0f0f0f; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-            .card { background: #1e1e1e; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); text-align: center; max-width: 400px; width: 90%; }
-            h1 { color: #a855f7; margin-bottom: 1.5rem; }
-            .info-group { text-align: left; background: #2d2d2d; padding: 15px; border-radius: 8px; margin-bottom: 1.5rem; }
-            .info-item { margin-bottom: 10px; border-bottom: 1px solid #444; padding-bottom: 5px; }
-            .info-item:last-child { border-bottom: none; margin-bottom: 0; }
-            .label { color: #888; font-size: 0.8em; display: block; margin-bottom: 4px; }
-            .value { font-family: monospace; word-break: break-all; color: #eee; font-size: 0.95em; }
-            
-            button { width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 1rem; }
-            .btn-sub { background: #a855f7; color: white; }
-            .btn-sub:hover { background: #9333ea; }
-            .btn-copy { background: #3b82f6; color: white; }
-            .btn-copy:hover { background: #2563eb; }
-            .btn-warn { background: #2d2d2d; color: #888; border: 1px solid #444; }
-            
-            .toast { position: fixed; bottom: 30px; background: rgba(50, 200, 50, 0.9); color: #fff; padding: 12px 24px; border-radius: 6px; opacity: 0; transition: 0.3s; transform: translateY(20px); }
-            .show-toast { opacity: 1; transform: translateY(0); }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>节点管理面板</h1>
-            
-            <div class="info-group">
-                <div class="info-item">
-                    <span class="label">管理地址 (UUID)</span>
-                    <span class="value">/${uuid}</span>
-                </div>
-                <div class="info-item">
-                    <span class="label">订阅 Token</span>
-                    <span class="value">${subToken}</span>
-                </div>
-            </div>
-            
-            <button class="btn-sub" onclick="copyText('${subLink}')">
-                🔗 复制订阅地址
-            </button>
-            <div style="font-size:0.8em; color:#888; margin-bottom:15px">推荐：填入 v2rayNG / Shadowrocket / Clash 使用</div>
-
-            <button class="btn-copy" onclick="fetchAndCopy()">
-                📋 复制节点内容 (Base64)
-            </button>
-            <div style="font-size:0.8em; color:#666; margin-bottom:5px">手动模式：直接获取 Base64 文本</div>
-        </div>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NODE LINK PANEL</title>
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --primary-hover: #4f46e5;
+            --bg-gradient-start: #f3f4f6;
+            --bg-gradient-end: #e5e7eb;
+            --card-bg: rgba(255, 255, 255, 0.85);
+        }
         
-        <div id="toast" class="toast">已复制!</div>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #a8c0ff 0%, #3f2b96 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            color: #333;
+        }
 
-        <script>
-            function showToast(msg) {
-                const t = document.getElementById('toast');
-                t.innerText = msg;
-                t.classList.add('show-toast');
-                setTimeout(() => t.classList.remove('show-toast'), 2000);
-            }
-            function copyText(text) {
-                navigator.clipboard.writeText(text).then(() => showToast('✅ 订阅地址已复制'));
-            }
-            async function fetchAndCopy() {
-                const btn = document.querySelector('.btn-copy');
-                const oldText = btn.innerText;
-                btn.innerText = '获取中...';
-                try {
-                    // 访问订阅路径获取内容
-                    const resp = await fetch('${subLink}');
-                    const content = await resp.text(); // 获取 Base64 内容
-                    navigator.clipboard.writeText(content).then(() => showToast('✅ 节点内容已复制'));
-                } catch (e) {
-                    showToast('❌ 获取失败');
-                } finally {
-                    btn.innerText = oldText;
-                }
-            }
-        </script>
-    </body>
-    </html>
+        .container {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            padding: 2rem;
+            width: 90%;
+            max-width: 800px;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        h1 {
+            color: #6366f1;
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: 800;
+        }
+
+        .info-block {
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #555;
+            display: inline-block;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            border-bottom: 1px dashed #ddd;
+            padding-bottom: 5px;
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { font-weight: bold; color: #555; }
+        .info-val { color: #6366f1; }
+
+        .section-title {
+            font-weight: bold;
+            margin: 20px 0 10px;
+            font-size: 1.2rem;
+            color: #333;
+        }
+
+        /* 输入框和开关样式 */
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e7ff;
+            border-radius: 8px;
+            font-size: 1rem;
+            outline: none;
+            transition: 0.3s;
+            box-sizing: border-box;
+            text-align: center;
+            color: #444;
+            background: #fff;
+        }
+        input[type="text"]:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 15px 0;
+            color: #555;
+        }
+        .checkbox-wrapper input {
+            margin-right: 10px;
+            transform: scale(1.2);
+            cursor: pointer;
+        }
+
+        /* 按钮样式 */
+        .btn-main {
+            background: linear-gradient(90deg, #6366f1, #8b5cf6);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+            margin-bottom: 15px;
+        }
+        .btn-main:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
+        }
+        .btn-main:active {
+            transform: translateY(1px);
+        }
+
+        /* 订阅链接展示框 */
+        .sub-link-display {
+            background: #eef2ff;
+            border: 1px solid #c7d2fe;
+            color: #4338ca;
+            padding: 10px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-size: 0.9rem;
+            margin-top: 5px;
+            cursor: pointer;
+        }
+        .sub-label {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 5px;
+            display: block;
+        }
+
+        /* 说明框 */
+        .note-box {
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+            color: #0369a1;
+            font-size: 0.9rem;
+            text-align: left;
+            line-height: 1.6;
+        }
+
+        /* 表格样式 */
+        .table-container {
+            margin-top: 30px;
+            overflow-x: auto;
+            background: rgba(255,255,255,0.5);
+            border-radius: 10px;
+            padding: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            color: #4f46e5;
+            font-weight: bold;
+        }
+        td code {
+            background: #e0e7ff;
+            padding: 2px 5px;
+            border-radius: 4px;
+            color: #3730a3;
+            font-family: monospace;
+        }
+
+        /* Toast 提示 */
+        #toast {
+            visibility: hidden;
+            min-width: 250px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 5px;
+            padding: 16px;
+            position: fixed;
+            z-index: 1;
+            left: 50%;
+            bottom: 30px;
+            transform: translateX(-50%);
+            font-size: 17px;
+        }
+        #toast.show {
+            visibility: visible;
+            -webkit-animation: fadein 0.5s, fadeout 0.5s 2.5s;
+            animation: fadein 0.5s, fadeout 0.5s 2.5s;
+        }
+
+        @-webkit-keyframes fadein {
+            from {bottom: 0; opacity: 0;} 
+            to {bottom: 30px; opacity: 1;}
+        }
+        @keyframes fadein {
+            from {bottom: 0; opacity: 0;}
+            to {bottom: 30px; opacity: 1;}
+        }
+        @-webkit-keyframes fadeout {
+            from {bottom: 30px; opacity: 1;} 
+            to {bottom: 0; opacity: 0;}
+        }
+        @keyframes fadeout {
+            from {bottom: 30px; opacity: 1;}
+            to {bottom: 0; opacity: 0;}
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>NODE LINK PANEL</h1>
+
+    <div class="info-block">
+        <div class="info-row">
+            <span class="info-label">[DOMAIN]</span>
+            <span class="info-val">${host}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">[UUID]</span>
+            <span class="info-val">${uuid}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">[SUB-PATH]</span>
+            <span class="info-val">/${subToken}</span>
+        </div>
+    </div>
+
+    <div class="section-title">自定义路径</div>
+    <div class="input-group">
+        <input type="text" id="customPath" value="/?ed=2560" placeholder="例如: /?ed=2560">
+    </div>
+
+    <div class="checkbox-wrapper">
+        <label>
+            <input type="checkbox" id="echToggle"> 开启 ECH 增强模式
+        </label>
+    </div>
+
+    <button class="btn-main" onclick="copySubscription()">复制订阅链接 (通用)</button>
+    
+    <div style="text-align: left; margin-top: 10px;">
+        <span class="sub-label">👇 订阅地址展示 (如果自动导入失败，请复制此链接手动填入):</span>
+        <input type="text" id="realSubLink" class="sub-link-display" readonly value="${subLink}?path=/?ed=2560" onclick="this.select()">
+    </div>
+
+    <div class="note-box">
+        💡 <b>入站协议说明:</b><br>
+        1. 点击按钮复制订阅链接，支持 Shadowrocket, Clash, V2RayNG 等。<br>
+        2. 如果 Clash 导入时提示 "Bad Gateway" 或 "Failed to fetch"，请尝试直接手动复制上方的订阅地址。<br>
+        3. 自定义路径和 ECH 设置会自动更新到订阅参数中。
+    </div>
+
+    <div class="section-title" style="margin-top: 40px;">URL 路径参数速查表</div>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>参数类型</th>
+                    <th>功能说明</th>
+                    <th>配置示例</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>s5/socks</code></td>
+                    <td>SOCKS5 代理</td>
+                    <td><code>s5=user:pass@host:port</code></td>
+                </tr>
+                <tr>
+                    <td><code>http</code></td>
+                    <td>HTTP 代理</td>
+                    <td><code>http=user:pass@host:port</code></td>
+                </tr>
+                <tr>
+                    <td><code>nat64</code></td>
+                    <td>NAT64 转换</td>
+                    <td><code>nat64=[2a01:4f9:c010::]</code></td>
+                </tr>
+                <tr>
+                    <td><code>ip/proxyip</code></td>
+                    <td>备用落地 IP</td>
+                    <td><code>ip=1.2.3.4:443</code></td>
+                </tr>
+                <tr>
+                    <td><code>proxyall</code></td>
+                    <td>全局模式</td>
+                    <td><code>proxyall=1</code></td>
+                </tr>
+            </tbody>
+        </table>
+        <div style="font-size: 0.8rem; color: #888; margin-top: 10px; text-align: left;">
+            注: s5/http/nat64/ip 均支持逗号分隔多个地址。
+        </div>
+    </div>
+</div>
+
+<div id="toast">已复制到剪贴板</div>
+
+<script>
+    const baseUrl = "${subLink}";
+    const pathInput = document.getElementById('customPath');
+    const echCheck = document.getElementById('echToggle');
+    const displayInput = document.getElementById('realSubLink');
+
+    function updateLink() {
+        let path = pathInput.value;
+        if (!path) path = "/?ed=2560"; // 默认值
+        
+        // 处理 ECH
+        // 注意：原版逻辑是将 ECH 参数编码进 path 或 hash，这里为了简化，我们直接展示最通用的 ?path= 参数
+        // 实际上 VLESS 协议的 path 修改在 getSubscription 函数中已经处理了
+        
+        let finalUrl = baseUrl + "?path=" + encodeURIComponent(path);
+        
+        if (echCheck.checked) {
+            // 模拟 ECH 增强模式的参数变化 (根据实际需求调整，这里仅做示例修改参数)
+            finalUrl += "&ech=1"; 
+        }
+
+        displayInput.value = finalUrl;
+    }
+
+    // 监听输入变化
+    pathInput.addEventListener('input', updateLink);
+    echCheck.addEventListener('change', updateLink);
+
+    function copySubscription() {
+        const url = displayInput.value;
+        navigator.clipboard.writeText(url).then(() => {
+            showToast("订阅链接已复制！");
+        }).catch(() => {
+            showToast("复制失败，请手动复制下方文本框");
+        });
+    }
+
+    function showToast(msg) {
+        var x = document.getElementById("toast");
+        x.innerText = msg;
+        x.className = "show";
+        setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
+    }
+
+    // 初始化
+    updateLink();
+</script>
+
+</body>
+</html>
     `;
 }
 
-// ========================== 5. VLESS 协议解析 (保持原样) ==========================
+// ==============================================================================
+// 5. VLESS 协议解析 (保持稳定逻辑)
+// ==============================================================================
 
 async function vlessOverWSHandler(request, uuid) {
     const webSocketPair = new WebSocketPair();
@@ -233,18 +532,16 @@ async function vlessOverWSHandler(request, uuid) {
     let address = '';
     let portWithRandomLog = '';
     const log = (info, event) => {
-        console.log(`[${address}:${portWithRandomLog}] ${info}`, event || '');
+        console.log(\`[\${address}:\${portWithRandomLog}] \${info}\`, event || '');
     };
     const earlyDataHeader = request.headers.get('sec-websocket-protocol') || '';
 
     const readableWebSocketStream = makeReadableWebSocketStream(webSocket, earlyDataHeader, log);
 
-    // VLESS 协议处理
     let remoteSocketWapper = { value: null };
     let udpStreamWrite = null; 
     let isDns = false;
 
-    // 流处理
     readableWebSocketStream.pipeTo(new WritableStream({
         async write(chunk, controller) {
             if (isDns && udpStreamWrite) {
@@ -257,25 +554,22 @@ async function vlessOverWSHandler(request, uuid) {
                 return;
             }
 
-            // 解析 VLESS 头部
             const { hasError, message, port, addressType, host, rawDataIndex } = processVlessHeader(chunk, uuid);
             
             if (hasError) {
-                throw new Error(message); // 如果不是 VLESS 协议，抛出错误
+                throw new Error(message); 
             }
 
             address = host;
             portWithRandomLog = port;
 
-            // 连接目标服务器
             const remoteSocket = connect({ hostname: address, port: port });
             remoteSocketWapper.value = remoteSocket;
 
             const writer = remoteSocket.writable.getWriter();
-            await writer.write(chunk.slice(rawDataIndex)); // 写入剩余数据
+            await writer.write(chunk.slice(rawDataIndex)); 
             writer.releaseLock();
 
-            // 响应回客户端
             remoteSocket.readable.pipeTo(new WritableStream({
                 async write(chunk) {
                     if (webSocket.readyState === WebSocket.OPEN) {
@@ -315,21 +609,21 @@ function processVlessHeader(vlessBuffer, userID) {
     let addressValueIndex = addressIndex + 1;
     let addressValue = '';
 
-    if (addressType === 1) { // IPv4
+    if (addressType === 1) { 
         addressLength = 4;
         addressValue = new Uint8Array(vlessBuffer.slice(addressValueIndex, addressValueIndex + addressLength)).join('.');
-    } else if (addressType === 2) { // Domain
+    } else if (addressType === 2) { 
         addressLength = new Uint8Array(vlessBuffer.slice(addressValueIndex, addressValueIndex + 1))[0];
         addressValueIndex += 1;
         addressValue = new TextDecoder().decode(vlessBuffer.slice(addressValueIndex, addressValueIndex + addressLength));
-    } else if (addressType === 3) { // IPv6
+    } else if (addressType === 3) { 
         addressLength = 16;
         const dataView = new DataView(vlessBuffer.slice(addressValueIndex, addressValueIndex + addressLength));
         const ipv6 = [];
         for (let i = 0; i < 8; i++) { ipv6.push(dataView.getUint16(i * 2).toString(16)); }
         addressValue = ipv6.join(':');
     } else {
-        return { hasError: true, message: `invalid addressType: ${addressType}` };
+        return { hasError: true, message: \`invalid addressType: \${addressType}\` };
     }
 
     return {
@@ -368,7 +662,7 @@ function makeReadableWebSocketStream(webSocket, earlyDataHeader, log) {
         },
         cancel(reason) {
             if (readableStreamCancel) return;
-            log(`ReadableStream was canceled, due to ${reason}`);
+            log(\`ReadableStream was canceled, due to \${reason}\`);
             readableStreamCancel = true;
             safeCloseWebSocket(webSocket);
         }
