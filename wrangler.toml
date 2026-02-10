@@ -1,6 +1,6 @@
-name = "mycloud"
+name = "xuanlanwuzhea"
 main = "_worker.js"  # 你的 JS 逻辑代码
-compatibility_date = "2026-02-05"
+compatibility_date = "2026-02-10"
 
 [limits]
 cpu_ms = 300000
@@ -22,4 +22,5 @@ head_sampling_rate = 1
 [[rules]]
 type = "CompiledWasm"
 globs = ["**/*.wasm"]
+
 fallthrough = true
