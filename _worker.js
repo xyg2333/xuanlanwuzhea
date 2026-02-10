@@ -15,7 +15,7 @@
  * proxyall/globalproxy       - 全局代理标志,无s5和http参数时纯直连      示例: proxyall=1
  * ==========================================================================================================================*/
 import {connect} from 'cloudflare:sockets';
-const defaultUuid = '4d9a005c-52bf-49c7-a40a-6277830d00f9'; // 可在环境变量配置，变量名称为UUID，两个地方都不写为不验证uuid
+const defaultUuid = '7aa0e005-e176-4500-a198-cf6ce5d13d5e'; // 可在环境变量配置，变量名称为UUID，两个地方都不写为不验证uuid
 const defaultPassword = '2333'; // 可在环境变量配置，变量名称为PASSWORD，两个地方都不写为不验证密码
 const httpUser = ''; // 可在环境变量配置，变量名称为HTTPUSER，两个地方都不写为不验证密码
 const httpPass = ''; // 可在环境变量配置，变量名称为HTTPPASS，两个地方都不写为不验证密码
@@ -488,4 +488,5 @@ export default {
             return new Response(html, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
         }
     }
+
 };
